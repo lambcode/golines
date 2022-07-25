@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime/pprof"
+	"strconv"
 	"strings"
 
 	log "github.com/sirupsen/logrus"
@@ -133,7 +135,7 @@ func run() error {
 			return err
 		}
 
-		result, err := shortener.Shorten(contents)
+		result, err := shortener.Shorten(contents, nil)
 		if err != nil {
 			return err
 		}
@@ -216,7 +218,25 @@ func processFile(shortener *Shortener, path string) ([]byte, []byte, error) {
 		return nil, nil, err
 	}
 
-	result, err := shortener.Shorten(contents)
+	gitModifiedOrNewLinesBytes, err := exec.Command(
+		"bash",
+		"-c",
+		fmt.Sprintf(`git blame "%s" | grep -n -e ^00000000000 | sed "s/:.*//g"`, path),
+	).Output()
+
+	gitModifiedOrNewLines := map[int]struct{}{}
+	for _, l := range strings.Split(string(gitModifiedOrNewLinesBytes), "\n") {
+		if l == "" {
+			continue
+		}
+		i, err := strconv.Atoi(l)
+		if err != nil {
+			return nil, nil, err
+		}
+		gitModifiedOrNewLines[i] = struct{}{}
+	}
+
+	result, err := shortener.Shorten(contents, gitModifiedOrNewLines)
 	return contents, result, err
 }
 

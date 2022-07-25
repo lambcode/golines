@@ -11,11 +11,24 @@ import (
 const annotationPrefix = "// __golines:shorten:"
 
 // CreateAnnotation generates the text of a comment that will annotate long lines.
-func CreateAnnotation(length int) string {
+func CreateAnnotation(length int, skip bool) string {
 	return fmt.Sprintf(
-		"%s%d",
+		"%s%d:%t",
 		annotationPrefix,
 		length,
+		skip,
+	)
+}
+
+// IsNonSkippedAnnotation determines whether the given line is an annotation created with CreateAnnotation and is not skipped.
+func IsNonSkippedAnnotation(line string) bool {
+	trimmed := strings.Trim(line, " \t")
+	return strings.HasPrefix(
+		trimmed,
+		annotationPrefix,
+	) && strings.HasSuffix(
+		trimmed,
+		"false",
 	)
 }
 
@@ -31,7 +44,7 @@ func IsAnnotation(line string) bool {
 func HasAnnotation(node dst.Node) bool {
 	startDecorations := node.Decorations().Start.All()
 	return len(startDecorations) > 0 &&
-		IsAnnotation(startDecorations[len(startDecorations)-1])
+		IsNonSkippedAnnotation(startDecorations[len(startDecorations)-1])
 }
 
 // HasTailAnnotation determines whether the given AST node has a line length annotation at its
@@ -39,7 +52,7 @@ func HasAnnotation(node dst.Node) bool {
 func HasTailAnnotation(node dst.Node) bool {
 	endDecorations := node.Decorations().End.All()
 	return len(endDecorations) > 0 &&
-		IsAnnotation(endDecorations[len(endDecorations)-1])
+		IsNonSkippedAnnotation(endDecorations[len(endDecorations)-1])
 }
 
 // HasAnnotationRecursive determines whether the given node or one of its children has a
@@ -86,14 +99,18 @@ func HasAnnotationRecursive(node dst.Node) bool {
 
 // ParseAnnotation returns the line length encoded in a golines annotation. If none is found,
 // it returns -1.
-func ParseAnnotation(line string) int {
+func ParseAnnotation(line string) (int, bool) {
 	if IsAnnotation(line) {
-		components := strings.SplitN(line, ":", 3)
+		components := strings.SplitN(line, ":", 4)
 		val, err := strconv.Atoi(components[2])
 		if err != nil {
-			return -1
+			return -1, false
 		}
-		return val
+		skip, err := strconv.ParseBool(components[3])
+		if err != nil {
+			return -1, false
+		}
+		return val, skip
 	}
-	return -1
+	return -1, false
 }

@@ -89,7 +89,7 @@ func NewShortener(config ShortenerConfig) *Shortener {
 }
 
 // Shorten shortens the provided golang file content bytes.
-func (s *Shortener) Shorten(contents []byte) ([]byte, error) {
+func (s *Shortener) Shorten(contents []byte, gitModifiedOrNewLines map[int]struct{}) ([]byte, error) {
 	if s.config.IgnoreGenerated && s.isGenerated(contents) {
 		return contents, nil
 	}
@@ -108,7 +108,7 @@ func (s *Shortener) Shorten(contents []byte) ([]byte, error) {
 
 		// Annotate all long lines
 		lines := strings.Split(string(contents), "\n")
-		annotatedLines, linesToShorten := s.annotateLongLines(lines)
+		annotatedLines, linesToShorten := s.annotateLongLines(lines, gitModifiedOrNewLines, round)
 		var stop bool
 
 		if linesToShorten == 0 {
@@ -224,33 +224,42 @@ func (s *Shortener) formatSrc(contents []byte) ([]byte, error) {
 // annotateLongLines adds specially-formatted comments to all eligible lines that are longer than
 // the configured target length. If a line already has one of these comments from a previous
 // shortening round, then the comment contents are updated.
-func (s *Shortener) annotateLongLines(lines []string) ([]string, int) {
+func (s *Shortener) annotateLongLines(lines []string, gitModifiedOrNewLines map[int]struct{}, round int) ([]string, int) {
 	annotatedLines := []string{}
 	linesToShorten := 0
 	prevLen := -1
+	prevSkip := false
 
-	for _, line := range lines {
+	for lineno, line := range lines {
 		length := s.lineLen(line)
 
-		if prevLen > -1 {
-			if length <= s.config.MaxLen {
+		if prevLen > -1 || prevSkip {
+			if prevSkip {
+				// do nothing
+			} else if length <= s.config.MaxLen {
 				// Shortening successful, remove previous annotation
 				annotatedLines = annotatedLines[:len(annotatedLines)-1]
 			} else if length < prevLen {
 				// Replace annotation with new length
-				annotatedLines[len(annotatedLines)-1] = CreateAnnotation(length)
+				annotatedLines[len(annotatedLines)-1] = CreateAnnotation(length, false)
 				linesToShorten++
 			}
 		} else if !s.isComment(line) && length > s.config.MaxLen {
+			skip := false
+			if round == 0 {
+				_, isGitModifiedLine := gitModifiedOrNewLines[lineno+1]
+				skip = !isGitModifiedLine
+			}
+
 			annotatedLines = append(
 				annotatedLines,
-				CreateAnnotation(length),
+				CreateAnnotation(length, skip),
 			)
 			linesToShorten++
 		}
 
 		annotatedLines = append(annotatedLines, line)
-		prevLen = ParseAnnotation(line)
+		prevLen, prevSkip = ParseAnnotation(line)
 	}
 
 	return annotatedLines, linesToShorten
@@ -279,7 +288,7 @@ func (s *Shortener) shortenCommentsFunc(contents []byte) []byte {
 	prefix := ""
 	lines := strings.Split(string(contents), "\n")
 	for _, line := range lines {
-		if s.isComment(line) && !IsAnnotation(line) &&
+		if s.isComment(line) && !IsNonSkippedAnnotation(line) &&
 			!s.isGoDirective(line) &&
 			s.lineLen(line) > s.config.MaxLen {
 			start := strings.Index(line, "//")
